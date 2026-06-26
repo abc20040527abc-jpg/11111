@@ -61,7 +61,27 @@
     const result=[]; const add=(side,reasons,stop)=>{ if(!reasons.length || !Number.isFinite(stop))return; const entry=last.close, risk=Math.abs(entry-stop); if(!risk || risk/entry>.35)return; const goodBias=bias==="NEUTRAL" || (bias==="RISK_ON"&&side==="LONG") || (bias==="RISK_OFF"&&side==="SHORT"); result.push({symbol,side,entry,stop,tp1:side==="LONG"?entry+risk:entry-risk,tp15:side==="LONG"?entry+risk*1.5:entry-risk*1.5,risk:risk/entry*100,reasons,biasOk:goodBias}); };
     add("LONG",longReasons,low); add("SHORT",shortReasons,high); return result;
   }
-  async function json(url) { const res=await fetch(url); if(!res.ok) throw new Error("BingX 回應錯誤："+res.status); const data=await res.json(); if(data.code && data.code!==0) throw new Error(data.msg||"BingX API 錯誤"); return data; }
+  const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+  async function json(url) {
+    let lastError;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+      try {
+        const res = await fetch(url, { cache: "no-store", signal: controller.signal });
+        if (!res.ok) throw new Error("BingX 回應錯誤：" + res.status);
+        const data = await res.json();
+        if (data.code && data.code !== 0) throw new Error(data.msg || "BingX API 錯誤");
+        return data;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) await pause(700 * (attempt + 1));
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    throw lastError;
+  }
   async function contracts() { const d=await json(API+"/openApi/swap/v2/quote/contracts"); return d.data.filter(x=>x.symbol?.endsWith("-USDT") && x.status===1).map(x=>x.symbol); }
   async function candles(symbol, interval) { const p=new URLSearchParams({symbol,interval,limit:"260"}); const d=await json(API+"/openApi/swap/v3/quote/klines?"+p); return d.data.map(x=>({open:x.open,high:x.high,low:x.low,close:x.close})); }
   function render(signals) { $("signalCount").textContent=signals.length; if(!signals.length){ $("content").className="empty"; $("content").textContent="本次掃描沒有符合條件的訊號。可更換週期或稍後再試。"; return; } $("content").className="table-wrap"; $("content").innerHTML=`<table><thead><tr><th>幣種</th><th>方向</th><th>進場</th><th>止損</th><th>1R</th><th>1.5R</th><th>風險</th><th>觸發原因</th><th>圖表</th></tr></thead><tbody>${signals.map(s=>`<tr><td class="symbol">${s.symbol}</td><td><span class="side ${s.side==="LONG"?"long":"short"}">${s.side==="LONG"?"長多":"短空"}</span></td><td>${fmt(s.entry)}</td><td>${fmt(s.stop)}</td><td>${fmt(s.tp1)}</td><td>${fmt(s.tp15)}</td><td>${fmt(s.risk)}%</td><td><ul class="reasons">${s.reasons.map(r=>`<li>${r}</li>`).join("")}${s.biasOk?"":"<li>與目前市場偏向相反</li>"}</ul></td><td><a target="_blank" rel="noreferrer" href="https://www.tradingview.com/chart/?symbol=BINGX:${s.symbol.replace("-","")}.P">TradingView</a></td></tr>`).join("")}</tbody></table>`; }
